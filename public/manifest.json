@@ -1,0 +1,17 @@
+{
+  "name": "JobShield",
+  "short_name": "JobShield",
+  "description": "The dashcam for contractors. Document every job with timestamped before & after photos.",
+  "start_url": "/app",
+  "display": "standalone",
+  "background_color": "#0F1B2D",
+  "theme_color": "#F97316",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

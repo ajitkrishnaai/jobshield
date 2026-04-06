@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-navy: #0F1B2D;
+  --color-navy-light: #1A2A42;
+  --color-navy-dark: #0A1220;
+  --color-orange: #F97316;
+  --color-orange-light: #FB923C;
+  --color-orange-dark: #EA580C;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Camera viewfinder */
+.camera-viewfinder {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+
+.camera-viewfinder video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Smooth transitions */
+.page-enter {
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Print styles for report */
+@media print {
+  .no-print { display: none !important; }
+  body { background: white !important; }
+}
