@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useRef } from 'react';
+// reportRef kept for potential future use
 import { getJob, getPhotosForJob, blobToDataUrl } from '@/lib/storage';
 import type { Job } from '@/lib/types';
 import { TRADE_LABELS } from '@/lib/types';
@@ -30,7 +31,7 @@ export default function ReportPage() {
   const params = useParams();
   const router = useRouter();
   const jobId = params.id as string;
-  const reportRef = useRef<HTMLDivElement>(null);
+  const reportRef = useRef<HTMLDivElement>(null); // kept for potential print view
 
   interface PhotoWithDataUrl {
     id: string;
@@ -77,58 +78,144 @@ export default function ReportPage() {
   }, [jobId, router]);
 
   async function handleDownloadPDF() {
-    if (!reportRef.current) return;
+    if (!job) return;
     setGenerating(true);
 
     try {
-      const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
 
-      // Wait for all images in the report to be fully loaded
-      const images = reportRef.current.querySelectorAll('img');
-      await Promise.all(
-        Array.from(images).map(
-          (img) =>
-            img.complete
-              ? Promise.resolve()
-              : new Promise<void>((resolve) => {
-                  img.onload = () => resolve();
-                  img.onerror = () => resolve();
-                })
-        )
-      );
-
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 14;
+      const contentW = pageW - margin * 2;
+      let y = 0;
 
-      let heightLeft = pdfHeight;
-      let position = 0;
-      const pageHeight = pdf.internal.pageSize.getHeight();
+      // Header bar
+      pdf.setFillColor(15, 27, 45); // navy
+      pdf.rect(0, 0, pageW, 38, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(18);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('JobShield', margin, 16);
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('Job Completion Report', pageW - margin, 16, { align: 'right' });
+      pdf.setFontSize(13);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`${TRADE_LABELS[job.trade]} — Completion Report`, margin, 28);
+      if (job.customerName) {
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Customer: ${job.customerName}`, margin, 35);
+      }
+      y = 48;
 
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
+      // Job details section
+      pdf.setTextColor(80, 80, 80);
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('JOB DETAILS', margin, y);
+      y += 5;
+      pdf.setDrawColor(220, 220, 220);
+      pdf.line(margin, y, pageW - margin, y);
+      y += 5;
 
-      while (heightLeft > 0) {
-        position = -(pdfHeight - heightLeft);
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
+      const details: [string, string][] = [
+        ['Trade', TRADE_LABELS[job.trade]],
+        ...(job.address ? [['Address', job.address] as [string, string]] : []),
+        ['Date', formatDate(job.createdAt)],
+        ...(job.startedAt ? [['Work Started', formatDateTime(job.startedAt)] as [string, string]] : []),
+        ...(job.completedAt ? [['Completed', formatDateTime(job.completedAt)] as [string, string]] : []),
+        ...(job.startedAt && job.completedAt
+          ? [['Duration', formatDuration(new Date(job.startedAt), new Date(job.completedAt))] as [string, string]]
+          : []),
+      ];
+
+      const colW = contentW / 2;
+      details.forEach(([label, value], i) => {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const x = margin + col * colW;
+        const rowY = y + row * 12;
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(label, x, rowY);
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(15, 27, 45);
+        pdf.text(value, x, rowY + 5);
+      });
+      y += Math.ceil(details.length / 2) * 12 + 8;
+
+      // Helper to add a photo section
+      async function addPhotoSection(photos: typeof beforePhotos, title: string) {
+        if (photos.length === 0) return;
+
+        if (y > pageH - 60) { pdf.addPage(); y = margin; }
+
+        pdf.setTextColor(80, 80, 80);
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(title, margin, y);
+        y += 5;
+        pdf.setDrawColor(220, 220, 220);
+        pdf.line(margin, y, pageW - margin, y);
+        y += 5;
+
+        const photoW = (contentW - 6) / 2;
+        const photoH = photoW * 0.75; // 4:3
+
+        for (let i = 0; i < photos.length; i++) {
+          const col = i % 2;
+          const x = margin + col * (photoW + 6);
+
+          if (col === 0 && i > 0) y += photoH + 14;
+          if (y + photoH > pageH - margin) { pdf.addPage(); y = margin; }
+
+          try {
+            pdf.addImage(photos[i].dataUrl, 'JPEG', x, y, photoW, photoH);
+          } catch {
+            pdf.setFillColor(240, 240, 240);
+            pdf.rect(x, y, photoW, photoH, 'F');
+            pdf.setFontSize(8);
+            pdf.setTextColor(150, 150, 150);
+            pdf.text('Photo unavailable', x + photoW / 2, y + photoH / 2, { align: 'center' });
+          }
+
+          pdf.setFontSize(7);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setTextColor(80, 80, 80);
+          pdf.text(photos[i].prompt, x, y + photoH + 4, { maxWidth: photoW });
+          pdf.setTextColor(150, 150, 150);
+          pdf.text(formatDateTime(photos[i].timestamp), x, y + photoH + 9, { maxWidth: photoW });
+        }
+        y += photoH + 16;
       }
 
-      const filename = `JobShield-Report-${job?.trade || 'job'}-${new Date().toISOString().split('T')[0]}.pdf`;
+      await addPhotoSection(beforePhotos, 'BEFORE — SITE CONDITION');
+      await addPhotoSection(afterPhotos, 'AFTER — COMPLETED WORK');
+
+      // Footer
+      if (y > pageH - 20) { pdf.addPage(); y = pageH - 16; }
+      pdf.setDrawColor(220, 220, 220);
+      pdf.line(margin, pageH - 14, pageW - margin, pageH - 14);
+      pdf.setFontSize(7);
+      pdf.setTextColor(150, 150, 150);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(
+        `Generated by JobShield · ${formatDateTime(new Date().toISOString())} · All photos include original timestamps for verification.`,
+        pageW / 2,
+        pageH - 8,
+        { align: 'center' }
+      );
+
+      const filename = `JobShield-Report-${job.trade}-${new Date().toISOString().split('T')[0]}.pdf`;
       pdf.save(filename);
     } catch (err) {
       console.error('PDF generation failed:', err);
-      alert('PDF generation failed. Try again.');
+      alert(`PDF generation failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerating(false);
     }
@@ -174,7 +261,7 @@ export default function ReportPage() {
 
       {/* Report content */}
       <div className="p-4">
-        <div ref={reportRef} className="bg-white max-w-2xl mx-auto rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-white max-w-2xl mx-auto rounded-xl shadow-sm overflow-hidden">
           {/* Report header */}
           <div className="bg-navy text-white p-6">
             <div className="flex items-center justify-between mb-4">
