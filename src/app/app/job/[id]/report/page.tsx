@@ -2,8 +2,8 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useRef } from 'react';
-import { getJob, getPhotosForJob } from '@/lib/storage';
-import type { Job, JobPhoto } from '@/lib/types';
+import { getJob, getPhotosForJob, blobToDataUrl } from '@/lib/storage';
+import type { Job } from '@/lib/types';
 import { TRADE_LABELS } from '@/lib/types';
 
 function formatDateTime(dateStr: string) {
@@ -32,9 +32,16 @@ export default function ReportPage() {
   const jobId = params.id as string;
   const reportRef = useRef<HTMLDivElement>(null);
 
+  interface PhotoWithDataUrl {
+    id: string;
+    prompt: string;
+    timestamp: string;
+    dataUrl: string;
+  }
+
   const [job, setJob] = useState<Job | null>(null);
-  const [beforePhotos, setBeforePhotos] = useState<JobPhoto[]>([]);
-  const [afterPhotos, setAfterPhotos] = useState<JobPhoto[]>([]);
+  const [beforePhotos, setBeforePhotos] = useState<PhotoWithDataUrl[]>([]);
+  const [afterPhotos, setAfterPhotos] = useState<PhotoWithDataUrl[]>([]);
   const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
@@ -44,13 +51,29 @@ export default function ReportPage() {
       return;
     }
     setJob(j);
-    Promise.all([
-      getPhotosForJob(jobId, 'before'),
-      getPhotosForJob(jobId, 'after'),
-    ]).then(([b, a]) => {
-      setBeforePhotos(b);
-      setAfterPhotos(a);
-    });
+
+    async function loadPhotos() {
+      const [bPhotos, aPhotos] = await Promise.all([
+        getPhotosForJob(jobId, 'before'),
+        getPhotosForJob(jobId, 'after'),
+      ]);
+
+      const convert = async (photos: typeof bPhotos): Promise<PhotoWithDataUrl[]> => {
+        const results: PhotoWithDataUrl[] = [];
+        for (const p of photos) {
+          if (p.blob) {
+            const dataUrl = await blobToDataUrl(p.blob);
+            results.push({ id: p.id, prompt: p.prompt, timestamp: p.timestamp, dataUrl });
+          }
+        }
+        return results;
+      };
+
+      setBeforePhotos(await convert(bPhotos));
+      setAfterPhotos(await convert(aPhotos));
+    }
+
+    loadPhotos();
   }, [jobId, router]);
 
   async function handleDownloadPDF() {
@@ -61,10 +84,25 @@ export default function ReportPage() {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
 
+      // Wait for all images in the report to be fully loaded
+      const images = reportRef.current.querySelectorAll('img');
+      await Promise.all(
+        Array.from(images).map(
+          (img) =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise<void>((resolve) => {
+                  img.onload = () => resolve();
+                  img.onerror = () => resolve();
+                })
+        )
+      );
+
       const canvas = await html2canvas(reportRef.current, {
         scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff',
+        logging: false,
       });
 
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -207,7 +245,8 @@ export default function ReportPage() {
                 {beforePhotos.map((p, i) => (
                   <div key={p.id} className="space-y-1">
                     <div className="aspect-[4/3] rounded-lg overflow-hidden bg-gray-100">
-                      {p.blob && <PhotoDisplay blob={p.blob} alt={`Before ${i + 1}`} />}
+                      {/* eslint-disable-next-line @next/next/no-img-element -- data URL for PDF capture */}
+                      <img src={p.dataUrl} alt={`Before ${i + 1}`} className="w-full h-full object-cover" />
                     </div>
                     <p className="text-xs text-gray-500">{p.prompt}</p>
                     <p className="text-xs text-gray-400">{formatDateTime(p.timestamp)}</p>
@@ -227,7 +266,8 @@ export default function ReportPage() {
                 {afterPhotos.map((p, i) => (
                   <div key={p.id} className="space-y-1">
                     <div className="aspect-[4/3] rounded-lg overflow-hidden bg-gray-100">
-                      {p.blob && <PhotoDisplay blob={p.blob} alt={`After ${i + 1}`} />}
+                      {/* eslint-disable-next-line @next/next/no-img-element -- data URL for PDF capture */}
+                      <img src={p.dataUrl} alt={`After ${i + 1}`} className="w-full h-full object-cover" />
                     </div>
                     <p className="text-xs text-gray-500">{p.prompt}</p>
                     <p className="text-xs text-gray-400">{formatDateTime(p.timestamp)}</p>
@@ -260,14 +300,3 @@ function formatDuration(start: Date, end: Date) {
   return `${h}h ${m}m`;
 }
 
-function PhotoDisplay({ blob, alt }: { blob: Blob; alt: string }) {
-  const [url, setUrl] = useState<string>('');
-  useEffect(() => {
-    const u = URL.createObjectURL(blob);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- blob URL from IndexedDB
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [blob]);
-  // eslint-disable-next-line @next/next/no-img-element -- blob URL
-  return url ? <img src={url} alt={alt} className="w-full h-full object-cover" /> : null;
-}
